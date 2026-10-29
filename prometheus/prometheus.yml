@@ -1,0 +1,66 @@
+global:
+  scrape_interval: 15s       # resolución suficiente para rate()[1m] (4 muestras por ventana)
+  evaluation_interval: 15s
+  external_labels:
+    entorno: practica-final
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Auto-monitoreo de Prometheus
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Hardware / sistema operativo (CPU, memoria, disco)
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          rol: host
+
+  # Red vía SNMP: Prometheus llama al snmp_exporter, que consulta al agente.
+  # El relabeling convierte el target (snmp-agent:161) en parámetro ?target=
+  # y redirige el scrape real al exporter.
+  - job_name: snmp
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      auth: [public_v2]
+    static_configs:
+      - targets: ["snmp-agent:161"]
+        labels:
+          rol: router-simulado
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: snmp-exporter:9116
+
+  # Métricas propias del snmp_exporter (duración de los walks, errores)
+  - job_name: snmp-exporter
+    static_configs:
+      - targets: ["snmp-exporter:9116"]
+
+  # Salud del pipeline de logs
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+  - job_name: promtail
+    static_configs:
+      - targets: ["promtail:9080"]
+
+  # Salud del pipeline de trazas
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  # Métricas RED (Rate, Errors, Duration) derivadas de las trazas por spanmetrics
+  - job_name: otel-spanmetrics
+    static_configs:
+      - targets: ["otel-collector:8889"]

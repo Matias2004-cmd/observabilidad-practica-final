@@ -1,0 +1,27 @@
+apiVersion: 1
+
+# Punto de contacto: Webhook hacia el receptor simulado
+contactPoints:
+  - orgId: 1
+    name: webhook-sre
+    receivers:
+      - uid: webhook-sre
+        type: webhook
+        settings:
+          url: http://webhook-receiver:5001/alert
+          httpMethod: POST
+        disableResolveMessage: false
+
+# Política de notificación (enrutamiento): todo lo de severidad critical/warning
+# del equipo SRE va al webhook. group_wait corto para la demo.
+policies:
+  - orgId: 1
+    receiver: webhook-sre
+    group_by: ["alertname", "instance"]
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 10m
+    routes:
+      - receiver: webhook-sre
+        object_matchers:
+          - ["team", "=", "sre"]

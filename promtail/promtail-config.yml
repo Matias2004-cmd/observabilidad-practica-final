@@ -1,0 +1,62 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml   # offset de lectura de cada archivo
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: cloud-app
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: cloud-app
+          environment: produccion-simulada
+          __path__: /var/log/cloud-app/*.log
+
+    # Ejemplo de línea de entrada (formato estilo CloudWatch/Cloud Logging):
+    # {"timestamp":"2026-10-29T14:03:11.512Z","level":"ERROR","service":"payments",
+    #  "cloud":{"provider":"aws","region":"sa-east-1"},"http":{"method":"POST",
+    #  "path":"/api/v1/charge","status":502},"latency_ms":1834,
+    #  "trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","message":"Upstream timeout ..."}
+    pipeline_stages:
+      # 1) Extrae campos del JSON (JMESPath permite leer campos anidados)
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            service: service
+            region: cloud.region
+            message: message
+            trace_id: trace_id
+
+      # 2) Descarta ruido: los healthchecks no aportan valor y consumen almacenamiento
+      - drop:
+          source: message
+          expression: ".*healthcheck.*"
+          drop_counter_reason: healthcheck
+
+      # 3) Normaliza la severidad a minúsculas (ERROR -> error). Grafana colorea
+      #    automáticamente las líneas según los valores debug/info/warn/error/critical
+      - template:
+          source: level
+          template: '{{ ToLower .Value }}'
+
+      # 4) Indexa como LABELS solo campos de baja cardinalidad
+      - labels:
+          level:
+          service:
+          region:
+
+      # 5) trace_id es de altísima cardinalidad: va como structured metadata
+      #    (consultable, pero no crea un stream nuevo por cada valor)
+      - structured_metadata:
+          trace_id:
+
+      # 6) Usa la hora del evento original y no la hora de lectura de promtail
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano

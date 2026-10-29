@@ -1,0 +1,69 @@
+receivers:
+  # La aplicación envía trazas por OTLP (protocolo estándar, independiente del backend)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Protege al collector de quedarse sin memoria ante ráfagas de spans
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+  # Agrupa spans antes de exportar: menos llamadas de red, más throughput
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+  # Etiqueta todas las trazas con el entorno
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: practica-final
+        action: upsert
+
+connectors:
+  # Deriva métricas RED (tasa, errores, duración) a partir de los spans
+  spanmetrics:
+    # Prefijo explícito: sin él las métricas se llaman "calls_total" y "duration_*",
+    # nombres demasiado genéricos que podrían chocar con otras métricas en Prometheus
+    namespace: traces.span.metrics
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+    dimensions:
+      - name: http.method
+      - name: http.status_code
+    metrics_flush_interval: 15s
+
+exporters:
+  # Reenvía las trazas a Jaeger por OTLP
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # Expone las métricas de spanmetrics para que Prometheus las scrapee
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/jaeger, spanmetrics, debug]
+    metrics/spanmetrics:
+      receivers: [spanmetrics]
+      exporters: [prometheus]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888

@@ -1,0 +1,43 @@
+# Loki en modo monolítico (single binary) con almacenamiento en filesystem.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb            # índice TSDB (recomendado desde Loki 2.8+)
+      object_store: filesystem
+      schema: v13            # requerido para structured metadata
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  allow_structured_metadata: true   # trace_id viaja como metadata, no como label
+  volume_enabled: true
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

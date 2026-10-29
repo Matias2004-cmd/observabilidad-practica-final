@@ -1,0 +1,314 @@
+{
+  "uid": "dashboard-operativo",
+  "title": "Dashboard Operativo SRE",
+  "description": "Vista única de hardware, red (SNMP), storage, logs y APM",
+  "tags": ["sre", "practica-final"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "nivel",
+        "label": "Nivel de log",
+        "type": "custom",
+        "query": "debug,info,warn,error,critical",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Errores críticos (Loki)",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "enable": false,
+        "iconColor": "red",
+        "expr": "{job=\"cloud-app\", level=\"critical\"}",
+        "titleFormat": "CRITICAL",
+        "textFormat": "{{service}}"
+      }
+    ]
+  },
+  "panels": [
+    { "id": 100, "type": "row", "title": "Resumen de salud", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "panels": [] },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Estado de los targets (up)",
+      "description": "1 = el target responde al scrape de Prometheus",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "up", "legendFormat": "{{job}}", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 2,
+      "type": "gauge",
+      "title": "Uso de CPU",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100)", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 70 }, { "color": "red", "value": 80 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdMarkers": true }
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Uso de memoria",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "targets": [ { "refId": "A", "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 75 }, { "color": "red", "value": 90 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdMarkers": true }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Uso de CPU en el tiempo (umbral de alerta 80%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 6 },
+      "targets": [
+        { "refId": "A", "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100)", "legendFormat": "CPU total {{instance}}" },
+        { "refId": "B", "expr": "avg by (mode) (rate(node_cpu_seconds_total{mode=~\"user|system|iowait\"}[1m])) * 100", "legendFormat": "{{mode}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "fillOpacity": 10, "lineWidth": 2, "thresholdsStyle": { "mode": "line+area" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "transparent", "value": null }, { "color": "red", "value": 80 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    { "id": 101, "type": "row", "title": "Red (SNMP)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }, "panels": [] },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Ancho de banda por interfaz (Mbps) - SNMP",
+      "description": "rate(ifHCInOctets/ifHCOutOctets[1m]) * 8 / 1e6. Salida dibujada en negativo.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "rate(ifHCInOctets{job=\"snmp\", ifName!=\"lo\"}[1m]) * 8 / 1000000", "legendFormat": "{{ifName}} entrada" },
+        { "refId": "B", "expr": "rate(ifHCOutOctets{job=\"snmp\", ifName!=\"lo\"}[1m]) * 8 / 1000000", "legendFormat": "{{ifName}} salida" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Mbits", "decimals": 2, "custom": { "fillOpacity": 20, "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*salida" }, "properties": [ { "id": "custom.transform", "value": "negative-Y" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Estado operativo de interfaces (ifOperStatus)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 14 },
+      "targets": [ { "refId": "A", "expr": "ifOperStatus{job=\"snmp\"}", "legendFormat": "{{ifName}}", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [ { "type": "value", "options": { "1": { "text": "UP", "color": "green" }, "2": { "text": "DOWN", "color": "red" }, "3": { "text": "TESTING", "color": "orange" }, "7": { "text": "LOWER LAYER DOWN", "color": "red" } } } ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Errores + descartes de interfaz (paquetes/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 18 },
+      "targets": [ { "refId": "A", "expr": "sum(rate(ifInErrors{job=\"snmp\"}[5m]) + rate(ifOutErrors{job=\"snmp\"}[5m]) + rate(ifInDiscards{job=\"snmp\"}[5m]))", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps", "decimals": 2,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+
+    { "id": 102, "type": "row", "title": "Estado del storage", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }, "panels": [] },
+    {
+      "id": 8,
+      "type": "gauge",
+      "title": "Uso de disco por filesystem",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/mnt/host/c\"} / node_filesystem_size_bytes{mountpoint=\"/mnt/host/c\"})", "legendFormat": "Disco C: (Windows)", "instant": true },
+        { "refId": "B", "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/var/lib\"} / node_filesystem_size_bytes{mountpoint=\"/var/lib\"})", "legendFormat": "Disco de datos Docker", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 80 }, { "color": "red", "value": 90 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "orientation": "horizontal", "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Espacio libre en C:",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 23 },
+      "targets": [ { "refId": "A", "expr": "node_filesystem_avail_bytes{mountpoint=\"/mnt/host/c\"}", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes", "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 5000000000 }, { "color": "green", "value": 20000000000 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "C: libre proyectado en 24 h",
+      "description": "predict_linear sobre la última hora: anticipa el llenado del disco antes de que ocurra",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 27 },
+      "targets": [ { "refId": "A", "expr": "predict_linear(node_filesystem_avail_bytes{mountpoint=\"/mnt/host/c\"}[1h], 24 * 3600)", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes", "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 5000000000 }, { "color": "green", "value": 20000000000 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "I/O de disco (lectura / escritura)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (device) (rate(node_disk_read_bytes_total[1m]))", "legendFormat": "{{device}} lectura" },
+        { "refId": "B", "expr": "sum by (device) (rate(node_disk_written_bytes_total[1m]))", "legendFormat": "{{device}} escritura" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "fillOpacity": 10, "lineWidth": 1 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*escritura" }, "properties": [ { "id": "custom.transform", "value": "negative-Y" } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    { "id": 103, "type": "row", "title": "Logs (Loki)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "panels": [] },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Volumen de logs por severidad",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 7, "w": 16, "x": 0, "y": 32 },
+      "targets": [ { "refId": "A", "expr": "sum by (level) (count_over_time({job=\"cloud-app\"}[1m]))", "legendFormat": "{{level}}" } ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "critical" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } } ] },
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "warn" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+          { "matcher": { "id": "byName", "options": "info" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "debug" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Tasa de error (% de logs error/critical)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 32 },
+      "targets": [ { "refId": "A", "expr": "100 * sum(count_over_time({job=\"cloud-app\", level=~\"error|critical\"}[5m])) / sum(count_over_time({job=\"cloud-app\"}[5m]))", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 10 }, { "color": "red", "value": 20 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 14,
+      "type": "logs",
+      "title": "Logs en tiempo real (filtrable por nivel)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 39 },
+      "targets": [ { "refId": "A", "expr": "{job=\"cloud-app\", level=~\"$nivel\"}" } ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+    },
+    {
+      "id": 15,
+      "type": "logs",
+      "title": "Errores lentos (> 1000 ms) - LogQL con parser json",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 49 },
+      "targets": [ { "refId": "A", "expr": "{job=\"cloud-app\", level=~\"error|critical\"} | json | latency_ms > 1000 | line_format \"[{{.service}} @ {{.cloud_region}}] {{.http_method}} {{.http_path}} -> {{.http_status}} en {{.latency_ms}} ms | {{.message}}\"" } ],
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+    },
+
+    { "id": 104, "type": "row", "title": "APM - métricas derivadas de trazas (OTel spanmetrics)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }, "panels": [] },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Latencia p95 por servicio",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket[1m])))", "legendFormat": "{{service_name}}" } ],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 5, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Spans por segundo por servicio",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 58 },
+      "targets": [ { "refId": "A", "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total[1m]))", "legendFormat": "{{service_name}}" } ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 5, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    }
+  ]
+}

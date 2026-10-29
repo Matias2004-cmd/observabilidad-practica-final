@@ -1,0 +1,23 @@
+# Recording rules: precalculan las consultas clave del enunciado.
+# Ventaja: el dashboard y la alerta consultan una serie ya calculada (más barato
+# y consistente) y la fórmula queda documentada en un solo lugar.
+groups:
+  - name: practica-final
+    interval: 15s
+    rules:
+      # Uso de CPU (%) = 100 - % de tiempo idle, promediado entre todos los núcleos
+      - record: instance:cpu_uso:porcentaje
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[1m])) * 100)
+
+      # Ancho de banda (Mbps) por interfaz, leído vía SNMP (contadores de 64 bits)
+      - record: interfaz:entrada:mbps
+        expr: rate(ifHCInOctets{job="snmp"}[1m]) * 8 / 1000000
+      - record: interfaz:salida:mbps
+        expr: rate(ifHCOutOctets{job="snmp"}[1m]) * 8 / 1000000
+
+      # Uso de disco (%): en Docker Desktop (WSL2) el disco C: de Windows se ve en
+      # /mnt/host/c y el disco de datos de Docker en /var/lib
+      - record: filesystem:uso:porcentaje
+        expr: |
+          100 * (1 - node_filesystem_avail_bytes{mountpoint=~"/mnt/host/c|/var/lib"}
+                   / node_filesystem_size_bytes{mountpoint=~"/mnt/host/c|/var/lib"})

@@ -1,0 +1,214 @@
+# =====================================================================
+#  Práctica Final Integradora - Stack de Observabilidad Open Source
+#  Pilares: Métricas (Prometheus) | Logs (Loki) | Trazas (Jaeger/OTel)
+# =====================================================================
+name: observabilidad
+
+networks:
+  obs:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+  app-logs:          # volumen compartido: log-generator escribe, promtail lee
+
+services:
+
+  # -------------------------------------------------------------------
+  # 1) MÉTRICAS
+  # -------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [obs]
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: node-exporter
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks: [obs]
+    restart: unless-stopped
+
+  # Agente SNMP simulado (net-snmp sobre Alpine) que además genera tráfico
+  # en su interfaz eth0 para que el ancho de banda sea visible.
+  snmp-agent:
+    build: ./snmp-agent
+    container_name: snmp-agent
+    networks: [obs]
+    restart: unless-stopped
+
+  snmp-exporter:
+    image: prom/snmp-exporter:v0.26.0
+    container_name: snmp-exporter
+    # Se usa el snmp.yml incluido en la imagen (módulo if_mib + auth public_v2)
+    ports:
+      - "9116:9116"
+    networks: [obs]
+    depends_on: [snmp-agent]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # 2) LOGS
+  # -------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    networks: [obs]
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - app-logs:/var/log/cloud-app:ro
+    ports:
+      - "9080:9080"
+    networks: [obs]
+    depends_on: [loki]
+    restart: unless-stopped
+
+  # Simula los logs JSON de una aplicación desplegada en la nube
+  log-generator:
+    image: python:3.12-alpine
+    container_name: log-generator
+    command: ["python", "-u", "/app/generate_logs.py"]
+    volumes:
+      - ./log-generator/generate_logs.py:/app/generate_logs.py:ro
+      - app-logs:/var/log/cloud-app
+    networks: [obs]
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # 3) VISUALIZACIÓN Y ALERTAS
+  # -------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/dashboard-operativo.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks: [obs]
+    depends_on: [prometheus, loki, jaeger]
+    restart: unless-stopped
+
+  # Receptor del Webhook de alertas (simula PagerDuty/Slack/Teams)
+  webhook-receiver:
+    image: python:3.12-alpine
+    container_name: webhook-receiver
+    command: ["python", "-u", "/app/receiver.py"]
+    volumes:
+      - ./webhook-receiver/receiver.py:/app/receiver.py:ro
+    ports:
+      - "5001:5001"
+    networks: [obs]
+    restart: unless-stopped
+
+  # Generador de carga de CPU para disparar la alerta (solo con --profile stress)
+  cpu-stress:
+    image: alpine:3.20
+    container_name: cpu-stress
+    profiles: ["stress"]
+    command: ["sh", "-c", "echo \"Estresando $$(nproc) CPUs\"; for i in $$(seq $$(nproc)); do yes > /dev/null & done; wait"]
+    networks: [obs]
+
+  # -------------------------------------------------------------------
+  # 4) TRAZAS DISTRIBUIDAS / APM
+  # -------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol/otel-collector-config.yml"]
+    volumes:
+      - ./otel-collector/otel-collector-config.yml:/etc/otelcol/otel-collector-config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # métricas internas del collector
+      - "8889:8889"   # métricas RED generadas por spanmetrics
+    networks: [obs]
+    depends_on: [jaeger]
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.58.0
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # UI de Jaeger
+    networks: [obs]
+    restart: unless-stopped
+
+  # Aplicación de microservicios de prueba (frontend, customer, driver, route)
+  # con cuellos de botella conocidos (lock de MySQL simulado, Redis lento).
+  hotrod:
+    image: jaegertracing/example-hotrod:1.58.0
+    container_name: hotrod
+    command: ["all"]
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8080:8080"
+    networks: [obs]
+    depends_on: [otel-collector]
+    restart: unless-stopped
+
+  # Generador de carga: pide viajes a HotROD para producir trazas continuas
+  hotrod-load:
+    image: curlimages/curl:8.8.0
+    container_name: hotrod-load
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sleep 15
+        while true; do
+          for c in 123 392 731 567; do
+            curl -s -o /dev/null "http://hotrod:8080/dispatch?customer=$$c&nonse=$$RANDOM" &
+          done
+          wait
+          sleep 3
+        done
+    networks: [obs]
+    depends_on: [hotrod]
+    restart: unless-stopped
